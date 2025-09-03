@@ -1,37 +1,85 @@
 // /routes/userRoutes.js
 import express from 'express';
-// import { getAllUsers, updateUser, deleteUser } from '../controllers/userController.js';
-import { authenticateJWT, authorizeRoles } from '../middleware/authMiddleware.js';
 import {
-    createUser,
-    getAllUsers,
-    getUserById,
-    updateUser,
-    deleteUser, getDoctorById, getDoctorsByDepartment,
-    getDoctors,
-    searchDoctor
-  } from '../controllers/userController.js';
+  getAllUsers,
+  getUserById,
+  createUser,
+  updateUser,
+  updateUserPassword,
+  toggleUserStatus,
+  deleteUser,
+  getUsersByRole,
+  getUserStats
+} from '../controllers/userController.js';
+import { authenticateJWT, authorizeRoles } from '../middleware/authMiddleware.js';
+
 const router = express.Router();
 
+// Apply authentication middleware to all routes
+router.use(authenticateJWT);
 
-router.get('/doctors/department/:departmentId', authenticateJWT, authorizeRoles('Doctor', 'Receptionist', 'Admin','superAdmin', 'Accountant'), getDoctorsByDepartment);
+// GET routes - Order matters! More specific routes should come BEFORE general ones
 
-// Get doctor by ID
-router.get('/doctors/:id', authenticateJWT, authorizeRoles('Doctor', 'Receptionist', 'Admin','superAdmin', 'Accountant'), getDoctorById);
-router.get('/doctors', authenticateJWT, authorizeRoles('Doctor', 'Receptionist', 'Admin','superAdmin', 'Accountant'), getDoctors);
+// Get user statistics (Admin and superAdmin only)
+router.get('/stats', 
+  authorizeRoles('Admin', 'superAdmin'), 
+  getUserStats
+);
 
-router.post('/',authenticateJWT, authorizeRoles('Doctor', 'Receptionist', 'Admin','superAdmin', 'Accountant'), createUser);
-// Get all users (Super Admin)
-router.get('/', authenticateJWT, authorizeRoles('Doctor', 'Receptionist', 'Admin','superAdmin', 'Accountant'), getAllUsers);
+// Get users by role (Admin and superAdmin only)
+router.get('/role/:role', 
+  authorizeRoles('Admin', 'superAdmin'), 
+  getUsersByRole
+);
 
-// Get a single user by ID (Super Admin)
-router.get('/:id',authenticateJWT, authorizeRoles('Doctor', 'Receptionist', 'Admin','superAdmin', 'Accountant'), getUserById);
-// Update a user (Super Admin)
-router.put('/:id', authenticateJWT, authorizeRoles('Doctor', 'Receptionist', 'Admin','superAdmin', 'Accountant'), updateUser);
+// Get all users with pagination and filtering (Admin and superAdmin only)
+router.get('/', 
+  authorizeRoles('Admin', 'superAdmin'), 
+  getAllUsers
+);
 
-// Delete a user (Super Admin)
-router.delete('/:userId', authenticateJWT, authorizeRoles('Doctor', 'Receptionist', 'Admin','superAdmin', 'Accountant'), deleteUser);
-router.get('/search', authenticateJWT, authorizeRoles('Doctor', 'Receptionist', 'Admin', 'superAdmin'), searchDoctor);
-// router.get('/search', searchDoctor);
+// Get user by ID (Admin and superAdmin only) - This should be LAST among GET routes
+router.get('/:id', 
+  authorizeRoles('Admin', 'superAdmin'), 
+  getUserById
+);
+
+// POST routes
+// Create new user (Admin and superAdmin only)
+router.post('/', 
+  authorizeRoles('Admin', 'superAdmin'), 
+  createUser
+);
+
+// PUT routes
+// Update user password (Admin and superAdmin only) - More specific route first
+router.put('/:id/password', 
+  authorizeRoles('Admin', 'superAdmin'), 
+  updateUserPassword
+);
+
+// Toggle user active status (Admin and superAdmin only) - More specific route first
+router.put('/:id/toggle-status', 
+  authorizeRoles('Admin', 'superAdmin'), 
+  toggleUserStatus
+);
+
+// Update user (Admin and superAdmin only) - General route last
+router.put('/:id', 
+  authorizeRoles('Admin', 'superAdmin'), 
+  updateUser
+);
+
+// DELETE routes
+// Delete user (soft delete by default, permanent with ?permanent=true)
+// Only superAdmin can permanently delete, Admin can soft delete
+router.delete('/:id', (req, res, next) => {
+  const { permanent } = req.query;
+  if (permanent === 'true') {
+    return authorizeRoles('superAdmin')(req, res, next);
+  } else {
+    return authorizeRoles('Admin', 'superAdmin')(req, res, next);
+  }
+}, deleteUser);
 
 export default router;

@@ -1,246 +1,554 @@
 import User from '../models/userModel.js';
-import Department from '../models/departmentModel.js'
+import bcrypt from 'bcryptjs';
+import mongoose from 'mongoose';
 
-
-export const createUser = async (req, res) => {
-  const { name, email, password, role, departmentId, specialization, consultationCharges, contactNumber } = req.body;
-console.log(req.body);
-  try {
-    // If the user is a doctor, check if the department exists
-    let department;
-    if (role === 'Doctor') {
-      department = await Department.findById(departmentId);
-      if (!department) {
-        return res.status(404).json({ message: 'Department not found' });
-      }
-    }
-
-    const newUser = new User({
-      name,
-      email,
-      password, 
-      role,
-      contactNumber,
-      department: role === 'Doctor' ? department._id : null,
-      specialization: role === 'Doctor' ? specialization : null,
-      consultationCharges: role === 'Doctor' ? consultationCharges : null,
-    });
-
-   const savedUser = await newUser.save();
- 
-    res.status(201).json(savedUser);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// Fetch all users (including role filtering for doctors)
+// Get all users with pagination and filtering
 export const getAllUsers = async (req, res) => {
-  const { role } = req.query; // Optional query to filter by role
-
   try {
-    const query = role ? { role } : {};
-    const users = await User.find(query).populate('department', 'name'); // Populate department details if present
-    res.status(200).json(users);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
+    const {
+      page = 1,
+      limit = 10,
+      role,
+      isActive,
+      search,
+      sortBy = 'createdAt',
+      sortOrder = 'desc'
+    } = req.query;
 
-// Fetch a single user by ID
-export const getUserById = async (req, res) => {
-  const { id } = req.params;
-
-  try {
-    const user = await User.findById(id).populate('department', 'name');
-    if (!user) return res.status(404).json({ message: 'User not found' });
-    res.status(200).json(user);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// Update a user (including doctors)
-export const updateUser = async (req, res) => {
-  const { id } = req.params;
-  const { name, email, role, department, specialization, consultationCharges, contactNumber } = req.body;
-
-  try {
- 
-
-    // First check if user exists
-    const existingUser = await User.findById(id);
-    if (!existingUser) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    // Prepare update data
-    const updateData = {
-      name,
-      email,
-      contactNumber
-    };
-
-    // Handle doctor-specific fields
-    if (existingUser.role === 'Doctor') {
-      // Verify department if provided
-      if (department) {
-        const departmentDoc = await Department.findById(department);
-        if (!departmentDoc) {
-          return res.status(404).json({ message: 'Department not found' });
-        }
-        updateData.department = departmentDoc._id;
-      }
-
-      // Only update these fields if they're provided
-      if (specialization) updateData.specialization = specialization;
-      if (consultationCharges) updateData.consultationCharges = consultationCharges;
-    }
-
-
-
-    // Update user
-    const updatedUser = await User.findByIdAndUpdate(
-      id,
-      { $set: updateData },
-      { 
-        new: true, // Return updated document
-        runValidators: true // Run model validations
-      }
-    ).populate('department', 'name');
-
-    if (!updatedUser) {
-      return res.status(404).json({ message: 'Failed to update user' });
-    }
-
- 
-    res.status(200).json(updatedUser);
-
-  } catch (error) {
-    console.error('Update error:', error);
-    res.status(500).json({ 
-      message: 'Error updating user',
-      error: error.message 
-    });
-  }
-};
-
-// Delete a user
-export const deleteUser = async (req, res) => {
-  const { id } = req.params;
-
-  try {
-    const deletedUser = await User.findByIdAndDelete(id);
-    if (!deletedUser) return res.status(404).json({ message: 'User not found' });
-    res.status(200).json({ message: 'User deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-
-
-export const getDoctorsByDepartment = async (req, res) => {
-  const { departmentId } = req.params;
-  try {
-    const doctors = await User.find({ role: 'Doctor', department: departmentId });
-    res.status(200).json(doctors);
-  } catch (error) {
-    res.status(500).json({ message: 'Error fetching doctors by department', error });
-  }
-};
-
-// Get Doctor by ID
-export const getDoctorById = async (req, res) => {
-  const { id } = req.params;
-  try {
-    const doctor = await User.findById(id);
-    if (!doctor || doctor.role !== 'Doctor') {
-      return res.status(404).json({ message: 'Doctor not found' });
-    }
-    res.status(200).json(doctor);
-  } catch (error) {
-    res.status(500).json({ message: 'Error fetching doctor', error });
-  }
-};
-
-
-export const getDoctors = async (req, res) => {
- 
-  try {
-    const doctors = await User.find({ role: 'Doctor'});
-    res.status(200).json(doctors);
-  } catch (error) {
-    res.status(500).json({ message: 'Error fetching doctors by department', error });
-  }
-};
-
-
-// export const getDoctors = async (req, res) => {
-//   const { id } = req.params;
-//   try {
-//     const doctor = await User.findById(id);
-//     if (!doctor || doctor.role !== 'Doctor') {
-//       return res.status(404).json({ message: 'Doctor not found' });
-//     }
-//     res.status(200).json(doctor);
-//   } catch (error) {
-//     res.status(500).json({ message: 'Error fetching doctor', error });
-//   }
-// };
-
-// Doctor search
-export const searchDoctor = async (req, res) => {
-  try {
-    const { query, department, specialization } = req.query;
-    console.log(req.query);
+    // Build filter object
+    const filter = {};
     
-    if (!query && !department && !specialization) {
-      return res.status(400).json({ 
-        message: 'At least one search parameter is required' 
-      });
+    if (role) {
+      filter.role = role;
     }
-
-    // Build search criteria
-    const searchCriteria = {
-      role: 'Doctor', // Ensure only doctors are returned
-      isActive: true  // Only return active doctors
-    };
-
-    if (query) {
-      searchCriteria.$or = [
-        { name: { $regex: query, $options: 'i' } },
-        { contactNumber: { $regex: query, $options: 'i' } },
-        { email: { $regex: query, $options: 'i' } }
+    
+    if (isActive !== undefined) {
+      filter.isActive = isActive === 'true';
+    }
+    
+    if (search) {
+      filter.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { username: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+        { contactNumber: { $regex: search, $options: 'i' } }
       ];
     }
 
-    if (department) {
-      searchCriteria.department = department;
-    }
+    // Calculate pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const sortOptions = { [sortBy]: sortOrder === 'desc' ? -1 : 1 };
 
-    if (specialization) {
-      searchCriteria.specialization = { 
-        $regex: specialization, 
-        $options: 'i' 
-      };
-    }
+    // Execute query
+    const users = await User.find(filter)
+      .select('-password -resetPasswordToken')
+      .sort(sortOptions)
+      .skip(skip)
+      .limit(parseInt(limit));
 
-    const doctors = await User.find(searchCriteria)
-      .populate('department', 'name')
-      .select('-password')  // Exclude sensitive data
-      .limit(10)
-      .sort({ name: 1 });  // Sort results alphabetically
+    const totalUsers = await User.countDocuments(filter);
+    const totalPages = Math.ceil(totalUsers / parseInt(limit));
 
-    res.status(200).json({
-      count: doctors.length,
-      doctors
+    return res.status(200).json({
+      success: true,
+      message: 'Users retrieved successfully',
+      data: {
+        users,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages,
+          totalUsers,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1
+        }
+      }
     });
+
   } catch (error) {
-    console.error('Search doctor error:', error);
-    res.status(500).json({ 
-      message: 'Error searching doctors',
-      error: error.message 
+    console.error('Get all users error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
     });
   }
-}
+};
+
+// Get user by ID
+export const getUserById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID format'
+      });
+    }
+
+    const user = await User.findById(id).select('-password -resetPasswordToken');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'User retrieved successfully',
+      data: { user }
+    });
+
+  } catch (error) {
+    console.error('Get user by ID error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+// Create new user
+export const createUser = async (req, res) => {
+  try {
+    const {
+      name,
+      username,
+      email,
+      password,
+      role,
+      contactNumber,
+      consultationCharges
+    } = req.body;
+
+    // Check if user already exists
+    const existingUser = await User.findOne({
+      $or: [{ email }, { username }]
+    });
+
+    if (existingUser) {
+      const field = existingUser.email === email ? 'email' : 'username';
+      return res.status(400).json({
+        success: false,
+        message: `User with this ${field} already exists`
+      });
+    }
+
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    // Create user object
+    const userData = {
+      name,
+      username,
+      email,
+      password: hashedPassword,
+      role,
+      contactNumber
+    };
+
+    // Add consultation charges only for doctors
+    if (role === 'Doctor' && consultationCharges) {
+      userData.consultationCharges = consultationCharges;
+    }
+
+    const user = await User.create(userData);
+
+    // Remove password from response
+    const userResponse = user.toObject();
+    delete userResponse.password;
+    delete userResponse.resetPasswordToken;
+
+    return res.status(201).json({
+      success: true,
+      message: 'User created successfully',
+      data: { user: userResponse }
+    });
+
+  } catch (error) {
+    console.error('Create user error:', error);
+    
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      const validationErrors = Object.values(error.errors).map(err => err.message);
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors: validationErrors
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+// Update user
+export const updateUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID format'
+      });
+    }
+
+    // Remove fields that shouldn't be updated directly
+    const restrictedFields = ['password', 'resetPasswordToken', 'resetPasswordExpires'];
+    restrictedFields.forEach(field => delete updates[field]);
+
+    // Check if email or username is being updated and already exists
+    if (updates.email || updates.username) {
+      const query = {
+        _id: { $ne: id },
+        $or: []
+      };
+
+      if (updates.email) {
+        query.$or.push({ email: updates.email });
+      }
+      if (updates.username) {
+        query.$or.push({ username: updates.username });
+      }
+
+      const existingUser = await User.findOne(query);
+      if (existingUser) {
+        const field = existingUser.email === updates.email ? 'email' : 'username';
+        return res.status(400).json({
+          success: false,
+          message: `Another user with this ${field} already exists`
+        });
+      }
+    }
+
+    const user = await User.findByIdAndUpdate(
+      id,
+      { $set: updates },
+      { 
+        new: true, 
+        runValidators: true,
+        select: '-password -resetPasswordToken'
+      }
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'User updated successfully',
+      data: { user }
+    });
+
+  } catch (error) {
+    console.error('Update user error:', error);
+    
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      const validationErrors = Object.values(error.errors).map(err => err.message);
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors: validationErrors
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+// Update user password
+export const updateUserPassword = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { currentPassword, newPassword } = req.body;
+
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID format'
+      });
+    }
+
+    // Validate input
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Current password and new password are required'
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password must be at least 6 characters long'
+      });
+    }
+
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Verify current password
+    const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
+    if (!isCurrentPasswordValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Current password is incorrect'
+      });
+    }
+
+    // Hash new password
+    const salt = await bcrypt.genSalt(10);
+    const hashedNewPassword = await bcrypt.hash(newPassword, salt);
+
+    // Update password
+    await User.findByIdAndUpdate(id, { password: hashedNewPassword });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password updated successfully'
+    });
+
+  } catch (error) {
+    console.error('Update user password error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+// Toggle user active status
+export const toggleUserStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID format'
+      });
+    }
+
+    const user = await User.findById(id).select('-password -resetPasswordToken');
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Toggle the status
+    user.isActive = !user.isActive;
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: `User ${user.isActive ? 'activated' : 'deactivated'} successfully`,
+      data: { user }
+    });
+
+  } catch (error) {
+    console.error('Toggle user status error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+// Delete user (soft delete - set isActive to false)
+export const deleteUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { permanent = false } = req.query;
+
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID format'
+      });
+    }
+
+    if (permanent === 'true') {
+      // Permanent delete
+      const user = await User.findByIdAndDelete(id);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'User permanently deleted successfully'
+      });
+    } else {
+      // Soft delete - set isActive to false
+      const user = await User.findByIdAndUpdate(
+        id,
+        { isActive: false },
+        { new: true, select: '-password -resetPasswordToken' }
+      );
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'User deactivated successfully',
+        data: { user }
+      });
+    }
+
+  } catch (error) {
+    console.error('Delete user error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+// Get users by role
+export const getUsersByRole = async (req, res) => {
+  try {
+    const { role } = req.params;
+    const { isActive = true, page = 1, limit = 10 } = req.query;
+
+    // Validate role
+    const validRoles = ['Admin', 'Doctor', 'Receptionist', 'Accountant', 'superAdmin'];
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid role specified'
+      });
+    }
+
+    const filter = { role };
+    if (isActive !== undefined) {
+      filter.isActive = isActive === 'true';
+    }
+
+    // Calculate pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const users = await User.find(filter)
+      .select('-password -resetPasswordToken')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const totalUsers = await User.countDocuments(filter);
+    const totalPages = Math.ceil(totalUsers / parseInt(limit));
+
+    return res.status(200).json({
+      success: true,
+      message: `${role}s retrieved successfully`,
+      data: {
+        users,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages,
+          totalUsers,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Get users by role error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+// Get user statistics
+export const getUserStats = async (req, res) => {
+  try {
+    const stats = await User.aggregate([
+      {
+        $group: {
+          _id: '$role',
+          count: { $sum: 1 },
+          active: { $sum: { $cond: ['$isActive', 1, 0] } },
+          inactive: { $sum: { $cond: ['$isActive', 0, 1] } }
+        }
+      },
+      {
+        $project: {
+          role: '$_id',
+          count: 1,
+          active: 1,
+          inactive: 1,
+          _id: 0
+        }
+      }
+    ]);
+
+    const totalUsers = await User.countDocuments();
+    const activeUsers = await User.countDocuments({ isActive: true });
+    const inactiveUsers = await User.countDocuments({ isActive: false });
+
+    return res.status(200).json({
+      success: true,
+      message: 'User statistics retrieved successfully',
+      data: {
+        overview: {
+          totalUsers,
+          activeUsers,
+          inactiveUsers
+        },
+        roleStats: stats
+      }
+    });
+
+  } catch (error) {
+    console.error('Get user stats error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
