@@ -5,7 +5,7 @@ import { validationResult } from 'express-validator';
 
 // Improved query builder that properly combines search and filters
 export const buildCombinedQuery = (searchParams) => {
-  const { search, field, disease, autoantibody, autoantigen, epitope } = searchParams;
+  const { search, field, disease, autoantibody, autoantigen, epitope, type } = searchParams;
   let searchConditions = [];
   let filterConditions = [];
 
@@ -20,10 +20,11 @@ export const buildCombinedQuery = (searchParams) => {
           { autoantibody: searchRegex },
           { autoantigen: searchRegex },
           { epitope: searchRegex },
-          { uniprotId: searchRegex }
+          { uniprotId: searchRegex },
+          { type: searchRegex }
         ]
       });
-    } else if (['disease', 'autoantibody', 'autoantigen', 'epitope', 'uniprotId'].includes(field)) {
+    } else if (['disease', 'autoantibody', 'autoantigen', 'epitope', 'uniprotId', 'type'].includes(field)) {
       const searchQuery = {};
       searchQuery[field] = searchRegex;
       searchConditions.push(searchQuery);
@@ -42,6 +43,9 @@ export const buildCombinedQuery = (searchParams) => {
   }
   if (epitope && epitope.trim()) {
     filterConditions.push({ epitope: new RegExp(epitope.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') });
+  }
+  if (type && type.trim()) {
+    filterConditions.push({ type: new RegExp(type.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') });
   }
 
   // Combine search and filter conditions
@@ -115,7 +119,7 @@ export const escapeCSV = (str) => {
 export const convertToCSV = (entries) => {
   if (!entries || entries.length === 0) return '';
   
-  const headers = ['Disease', 'Autoantibody', 'Autoantigen', 'Epitope', 'UniProt ID', 'Date Added', 'Last Updated', 'Verified'];
+  const headers = ['Disease', 'Autoantibody', 'Autoantigen', 'Epitope', 'UniProt ID', 'Type', 'Date Added', 'Last Updated', 'Verified'];
   const csvRows = [headers.join(',')];
   
   entries.forEach(entry => {
@@ -125,6 +129,7 @@ export const convertToCSV = (entries) => {
       escapeCSV(entry.autoantigen || ''),
       escapeCSV(entry.epitope || ''),
       escapeCSV(entry.uniprotId || ''),
+      escapeCSV(entry.type || ''),
       entry.createdAt ? new Date(entry.createdAt).toISOString().split('T')[0] : '',
       entry.metadata?.lastUpdated ? new Date(entry.metadata.lastUpdated).toISOString().split('T')[0] : '',
       entry.metadata?.verified ? 'Yes' : 'No'
@@ -168,13 +173,13 @@ export const getAllEntries = async (req, res) => {
     const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 10), 100);
     const skip = (page - 1) * limit;
     
-    const { search, field, disease, autoantibody, autoantigen, epitope, sortBy = 'disease', sortOrder = 'asc' } = req.query;
+    const { search, field, disease, autoantibody, autoantigen, epitope, type, sortBy = 'disease', sortOrder = 'asc' } = req.query;
 
     // Build combined query
-    const query = buildCombinedQuery({ search, field, disease, autoantibody, autoantigen, epitope });
+    const query = buildCombinedQuery({ search, field, disease, autoantibody, autoantigen, epitope, type });
 
     // Build sort object with validation
-    const validSortFields = ['disease', 'autoantibody', 'autoantigen', 'epitope', 'uniprotId', 'createdAt', 'updatedAt'];
+    const validSortFields = ['disease', 'autoantibody', 'autoantigen', 'epitope', 'uniprotId', 'type', 'createdAt', 'updatedAt'];
     const sortField = validSortFields.includes(sortBy) ? sortBy : 'disease';
     const sort = {};
     sort[sortField] = sortOrder === 'desc' ? -1 : 1;
@@ -206,6 +211,7 @@ export const getAllEntries = async (req, res) => {
         autoantibody: autoantibody || null,
         autoantigen: autoantigen || null,
         epitope: epitope || null,
+        type: type || null,
         sortBy: sortField,
         sortOrder
       }
@@ -556,17 +562,26 @@ export const getUniqueValues = async (req, res) => {
   try {
     const { field } = req.params;
     
-    if (!field || !['disease', 'autoantibody', 'autoantigen', 'epitope', 'uniprotId'].includes(field)) {
+    if (!field || !['disease', 'autoantibody', 'autoantigen', 'epitope', 'uniprotId', 'type'].includes(field)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid field specified. Must be one of: disease, autoantibody, autoantigen, epitope, uniprotId'
+        message: 'Invalid field specified. Must be one of: disease, autoantibody, autoantigen, epitope, uniprotId, type'
       });
     }
 
     const values = await DiseaseData.distinct(field);
-    const filteredValues = values
-      .filter(value => value && value.toString().trim() !== '')
-      .map(value => value.toString().trim())
+    // Normalize and deduplicate case-insensitively while preserving first-seen original
+    const seen = new Map();
+    values.forEach((value) => {
+      if (!value) return;
+      const original = value.toString().trim();
+      if (!original) return;
+      const key = original.toLowerCase();
+      if (!seen.has(key)) {
+        seen.set(key, original);
+      }
+    });
+    const filteredValues = Array.from(seen.values())
       .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
 
     res.json({
@@ -624,9 +639,18 @@ export const getFilteredUniqueValues = async (req, res) => {
     }
 
     const values = await DiseaseData.distinct(field, filterQuery);
-    const filteredValues = values
-      .filter(value => value && value.toString().trim() !== '')
-      .map(value => value.toString().trim())
+    // Normalize and deduplicate case-insensitively while preserving first-seen original
+    const seen = new Map();
+    values.forEach((value) => {
+      if (!value) return;
+      const original = value.toString().trim();
+      if (!original) return;
+      const key = original.toLowerCase();
+      if (!seen.has(key)) {
+        seen.set(key, original);
+      }
+    });
+    const filteredValues = Array.from(seen.values())
       .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
 
     res.json({
