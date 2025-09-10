@@ -1,5 +1,6 @@
 import DiseaseData from '../models/diseaseModel.js';
 import { validationResult } from 'express-validator';
+import XLSX from 'xlsx';
 
 // Helper Methods
 
@@ -99,9 +100,13 @@ export const validateBulkEntries = (entries) => {
     if (!entry.autoantigen || !entry.autoantigen.toString().trim()) {
       errors.push(`Entry ${index + 1}: Autoantigen is required`);
     }
-    if (entry.uniprotId && entry.uniprotId !== 'Multiple' && !/^[A-Z][0-9A-Z]{5}$/.test(entry.uniprotId)) {
-      errors.push(`Entry ${index + 1}: Invalid UniProt ID format`);
+    if (!entry.epitope || !entry.epitope.toString().trim()) {
+      errors.push(`Entry ${index + 1}: Epitope is required`);
     }
+    if (!entry.uniprotId || !entry.uniprotId.toString().trim()) {
+      errors.push(`Entry ${index + 1}: UniProt ID is required`);
+    }
+   
   });
   
   return errors;
@@ -264,11 +269,11 @@ export const createEntry = async (req, res) => {
     }
 
     // Check for required fields
-    const { disease, autoantibody, autoantigen } = req.body;
-    if (!disease || !autoantibody || !autoantigen) {
+    const { disease, autoantibody, autoantigen, epitope, uniprotId } = req.body;
+    if (!disease || !autoantibody || !autoantigen || !epitope || !uniprotId) {
       return res.status(400).json({
         success: false,
-        message: 'Disease, autoantibody, and autoantigen are required'
+        message: 'Disease, autoantibody, autoantigen, epitope, and UniProt ID are required'
       });
     }
 
@@ -725,6 +730,28 @@ export const getStatistics = async (req, res) => {
   }
 };
 
+// Return distinct keys present under the `additional` map across all documents
+export const getDistinctAdditionalKeys = async (req, res) => {
+  try {
+    const pipeline = [
+      { $match: { additional: { $type: 'object' } } },
+      { $project: { kv: { $objectToArray: '$additional' } } },
+      { $unwind: '$kv' },
+      { $group: { _id: { $toLower: { $ifNull: ['$kv.k', ''] } }, original: { $first: '$kv.k' } } },
+      { $match: { _id: { $ne: '' } } },
+      { $project: { _id: 0, key: '$original' } },
+      { $sort: { key: 1 } }
+    ];
+
+    const results = await DiseaseData.aggregate(pipeline);
+    const keys = results.map((r) => r.key);
+
+    res.json({ success: true, data: keys, count: keys.length });
+  } catch (error) {
+    handleError(res, error, 'Error fetching distinct additional keys');
+  }
+};
+
 export const bulkImport = async (req, res) => {
   try {
     const { entries } = req.body;
@@ -827,5 +854,125 @@ export const exportEntries = async (req, res) => {
     });
   } catch (error) {
     handleError(res, error, 'Error exporting entries');
+  }
+};
+
+export const importFromFile = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No file uploaded' });
+    }
+
+    const isCsv = req.file.originalname.toLowerCase().endsWith('.csv');
+    const workbook = isCsv
+      ? XLSX.read(req.file.buffer.toString('utf8'), { type: 'string' })
+      : XLSX.read(req.file.buffer, { type: 'buffer' });
+
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const rawRows = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+
+    if (!Array.isArray(rawRows) || rawRows.length === 0) {
+      return res.status(400).json({ success: false, message: 'Uploaded file contains no rows' });
+    }
+
+    const normalizeHeader = (h) => h.toString().trim().toLowerCase().replace(/\s+/g, '');
+    const fieldMap = {
+      disease: ['disease', 'diseasename'],
+      autoantibody: ['autoantibody', 'antibody'],
+      autoantigen: ['autoantigen', 'antigen'],
+      epitope: ['epitope'],
+      uniprotId: ['uniprotid', 'uniprot', 'uniprot_id'],
+      type: ['type', 'category']
+    };
+
+    const mapRow = (row) => {
+      const lowered = {};
+      Object.keys(row).forEach((k) => {
+        lowered[normalizeHeader(k)] = row[k];
+      });
+
+      const getFirst = (keys) => {
+        for (const key of keys) {
+          if (lowered[key] !== undefined && lowered[key] !== null && lowered[key].toString().trim() !== '') {
+            return lowered[key];
+          }
+        }
+        return '';
+      };
+
+      // Build base mapped record
+      const base = {
+        disease: getFirst(fieldMap.disease).toString().trim(),
+        autoantibody: getFirst(fieldMap.autoantibody).toString().trim(),
+        autoantigen: getFirst(fieldMap.autoantigen).toString().trim(),
+        epitope: getFirst(fieldMap.epitope).toString().trim(),
+        uniprotId: getFirst(fieldMap.uniprotId).toString().trim(),
+        type: getFirst(fieldMap.type).toString().trim() || undefined
+      };
+
+      // Capture dynamic columns into additional
+      const knownKeys = new Set([
+        ...fieldMap.disease,
+        ...fieldMap.autoantibody,
+        ...fieldMap.autoantigen,
+        ...fieldMap.epitope,
+        ...fieldMap.uniprotId,
+        ...fieldMap.type
+      ]);
+
+      const additional = {};
+      Object.entries(lowered).forEach(([key, value]) => {
+        if (!knownKeys.has(key) && value !== undefined && value !== null && value.toString().trim() !== '') {
+          additional[key] = value.toString();
+        }
+      });
+
+      return { ...base, additional: Object.keys(additional).length ? additional : undefined };
+    };
+
+    const entries = rawRows
+      .map(mapRow)
+      .filter(e => e.disease && e.autoantibody && e.autoantigen && e.epitope && e.uniprotId);
+
+    if (entries.length === 0) {
+      return res.status(400).json({ success: false, message: 'No valid rows found after mapping required fields' });
+    }
+
+    const validationErrors = validateBulkEntries(entries);
+    if (validationErrors.length > 0) {
+      return res.status(400).json({ success: false, message: 'Validation errors in file data', errors: validationErrors });
+    }
+
+    const entriesWithMetadata = entries.map((entry) => ({
+      ...entry,
+      metadata: {
+        dateAdded: new Date(),
+        lastUpdated: new Date(),
+        verified: false,
+        source: 'file_import'
+      }
+    }));
+
+    const results = await DiseaseData.insertMany(entriesWithMetadata, { ordered: false });
+
+    return res.json({
+      success: true,
+      message: `Imported ${results.length} entries`,
+      data: { inserted: results.length, total: entriesWithMetadata.length, failed: entriesWithMetadata.length - results.length }
+    });
+  } catch (error) {
+    if (error.result && error.result.insertedCount >= 0) {
+      return res.status(207).json({
+        success: true,
+        message: `Partially successful: imported ${error.result.insertedCount} entries`,
+        data: {
+          inserted: error.result.insertedCount,
+          failed: error.writeErrors?.length || 0,
+          errors: error.writeErrors?.map((e) => e.errmsg) || []
+        }
+      });
+    }
+    return handleError(res, error, 'Error importing from file');
   }
 };

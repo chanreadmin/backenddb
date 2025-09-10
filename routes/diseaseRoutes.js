@@ -1,6 +1,7 @@
 // diseaseRoutes.js - Updated with new filtering endpoints
 
 import express from 'express';
+import multer from 'multer';
 import {
   getAllEntries,
   getEntryById,
@@ -14,14 +15,19 @@ import {
   getUniqueValues,
   getFilteredUniqueValues,
   getStatistics,
+  getDistinctAdditionalKeys,
   bulkImport,
-  exportEntries
+  exportEntries,
+  importFromFile
 } from '../controllers/diseaseController.js';
 
 const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 // Main CRUD routes
 router.get('/', getAllEntries);
+// Additional info helpers must appear before parameterized routes
+router.get('/additional/keys', getDistinctAdditionalKeys);
 router.get('/:id', getEntryById);
 router.post('/', createEntry);
 router.put('/:id', updateEntry);
@@ -45,5 +51,6 @@ router.get('/statistics/overview', getStatistics);
 // Bulk operations
 router.post('/bulk/import', bulkImport);
 router.get('/export/data', exportEntries);
+router.post('/import/file', upload.single('file'), importFromFile);
 
 export default router;

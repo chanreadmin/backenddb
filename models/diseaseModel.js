@@ -22,26 +22,25 @@ const dataSchema = new mongoose.Schema(
     },
     epitope: {
       type: String,
-      required: false,
+      required: true,
       trim: true,
     },
     uniprotId: {
       type: String,
-      required: false,
+      required: true,
       trim: true,
       index: true,
-      validate: {
-        validator: function (v) {
-          // Basic UniProt ID validation (6 characters: letter + 5 alphanumeric)
-          return !v || /^[A-Z][0-9A-Z]{5}$/.test(v) || v === "Multiple";
-        },
-        message: "Invalid UniProt ID format",
-      },
+    
     },
     type: {
       type: String,
       required: false,
       trim: true,
+    },
+    additional: {
+      type: Map,
+      of: String,
+      default: {}
     },
     metadata: {
       source: String,
