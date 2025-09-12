@@ -15,7 +15,7 @@ app.use(express.json());
 const corsOptions = {
   origin: [
     'http://localhost:3000', 
-    'https://billingfrontend-sigma.vercel.app'
+    'https://autoabdb.com'
   ],
   
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],

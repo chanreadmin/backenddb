@@ -16,8 +16,8 @@ coverage
 *.lcov
 
 # Dependency directories
-node_modules/
-jspm_packages/
+/node_modules
+/jspm_packages
 
 # Build / compiled output
 dist/
@@ -26,7 +26,7 @@ build/
 
 # Optional npm cache directory
 .npm
-
+._*
 # Optional eslint cache
 .eslintcache
 
